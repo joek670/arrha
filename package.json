@@ -1,0 +1,39 @@
+{
+  "name": "arrha",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Arrha: performance bonds for AI agents. Escrow plus slashable provider bonds on Base, keyed by ERC-8004 agent IDs and offered through x402.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joek670/arrha.git"
+  },
+  "keywords": [
+    "ai-agents",
+    "escrow",
+    "performance-bond",
+    "x402",
+    "erc-8004",
+    "erc-8183",
+    "base",
+    "usdc"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs && node --test test/*.test.mjs",
+    "demo": "node scripts/build.mjs && node scripts/demo.mjs",
+    "fuzz": "node scripts/build.mjs && node scripts/fuzz.mjs",
+    "gas": "node scripts/build.mjs && node scripts/gas.mjs"
+  },
+  "devDependencies": {
+    "@ethereumjs/block": "10.1.3",
+    "@ethereumjs/common": "10.1.3",
+    "@ethereumjs/tx": "10.1.3",
+    "@ethereumjs/util": "10.1.3",
+    "@ethereumjs/vm": "10.1.3",
+    "@openzeppelin/contracts": "5.4.0",
+    "solc": "0.8.38",
+    "viem": "2.57.12"
+  }
+}

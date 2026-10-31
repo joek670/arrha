@@ -1,0 +1,8 @@
+Arrha
+Copyright 2026 The Arrha Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It depends on, but does not include, OpenZeppelin Contracts (MIT License),
+viem (MIT License), the Solidity compiler's JavaScript build (MIT License)
+and the EthereumJS libraries (MPL-2.0), which are installed by npm.
