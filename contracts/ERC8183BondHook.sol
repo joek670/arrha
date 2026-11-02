@@ -17,6 +17,28 @@ interface IERC8183Hook is IERC165 {
     function afterAction(uint256 jobId, bytes4 selector, bytes calldata data) external;
 }
 
+/// @notice The job record of an ERC-8183 core, as the reference implementation
+/// (erc-8183/base-contracts) returns it from `getJob`.
+interface IERC8183Jobs {
+    struct Job {
+        address client;
+        uint8 status;
+        address provider;
+        uint48 expiredAt;
+        address evaluator;
+        uint48 submittedAt;
+        uint256 budget;
+        address hook;
+        address paymentToken;
+        uint256 providerAgentId;
+        string description;
+        uint256 settledAmount;
+        address payoutReceiver;
+    }
+
+    function getJob(uint256 jobId) external view returns (Job memory);
+}
+
 /// @title ERC8183BondHook
 /// @notice Adds provider performance bonds to ERC-8183 jobs.
 ///
@@ -25,7 +47,9 @@ interface IERC8183Hook is IERC165 {
 ///
 /// - When the provider sets the budget, it can offer cover in `optParams`:
 ///   `abi.encode(uint256 agentId, uint256 cover, uint256 deliverBy)`. The
-///   provider must act for that ERC-8004 agent (owner or agent wallet).
+///   provider must act for that ERC-8004 agent (owner or agent wallet), and
+///   `deliverBy` must come before the job expires, while the core still
+///   accepts a submission.
 /// - When the client funds, the cover is locked in AgentBond. If the agent's
 ///   free bond can't cover it, funding reverts: a client never funds a job
 ///   whose cover isn't really there.
@@ -37,11 +61,16 @@ interface IERC8183Hook is IERC165 {
 ///   the bond answers for lateness, which anyone can check, not for taste.
 /// - If the provider delivered on time but the job is never settled, anyone
 ///   can release the cover once `staleAfter` has passed since `deliverBy`.
+/// - Lateness is judged from the core's record of the submission too. The
+///   core's admin can detach a hook from a job (`batchDetachHook` in the
+///   reference implementation); the hook then misses the submission, but an
+///   on-time provider still can't be slashed.
 ///
 /// Only the configured ERC-8183 core may call the hook. Selectors are set at
 /// deployment, so the hook can be pointed at any core that follows the
-/// standard's encodings. Payouts that a frozen address can't receive are
-/// credited, as in AgentEscrow. Claim-based (streaming) flows aren't bonded.
+/// standard's encodings and returns the reference implementation's job record
+/// from `getJob`. Payouts that a frozen address can't receive are credited, as
+/// in AgentEscrow. Claim-based (streaming) flows aren't bonded.
 contract ERC8183BondHook is IERC8183Hook, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
     using SafeCast for uint256;
@@ -147,7 +176,7 @@ contract ERC8183BondHook is IERC8183Hook, ReentrancyGuardTransient {
     function slashLate(uint256 jobId) external nonReentrant {
         Bonded storage job = jobs[jobId];
         if (job.state != State.Locked) revert WrongState(job.state);
-        if (job.submittedAt != 0 || block.timestamp <= job.deliverBy) revert NotLate();
+        if (block.timestamp <= job.deliverBy || _onTime(jobId, job)) revert NotLate();
         _slash(jobId, job);
     }
 
@@ -155,7 +184,7 @@ contract ERC8183BondHook is IERC8183Hook, ReentrancyGuardTransient {
     function releaseStale(uint256 jobId) external {
         Bonded storage job = jobs[jobId];
         if (job.state != State.Locked) revert WrongState(job.state);
-        if (job.submittedAt == 0 || block.timestamp <= uint256(job.deliverBy) + staleAfter) revert NotStale();
+        if (!_onTime(jobId, job) || block.timestamp <= uint256(job.deliverBy) + staleAfter) revert NotStale();
         _release(jobId);
     }
 
@@ -180,7 +209,10 @@ contract ERC8183BondHook is IERC8183Hook, ReentrancyGuardTransient {
             return;
         }
         (uint256 agentId, uint256 cover, uint256 deliverBy) = abi.decode(optParams, (uint256, uint256, uint256));
-        if (deliverBy <= block.timestamp) revert BadTerms("deliverBy");
+        // The core refuses a submission from `expiredAt` on (0: no expiry), so
+        // a later deadline could be missed with no way to deliver.
+        uint256 expiredAt = IERC8183Jobs(core).getJob(jobId).expiredAt;
+        if (deliverBy <= block.timestamp || (expiredAt != 0 && deliverBy >= expiredAt)) revert BadTerms("deliverBy");
         bool byOwner = caller == identityRegistry.ownerOf(agentId);
         if (!byOwner && (caller == address(0) || caller != _agentWallet(agentId))) revert NotAgent();
         jobs[jobId] = Bonded({
@@ -232,6 +264,14 @@ contract ERC8183BondHook is IERC8183Hook, ReentrancyGuardTransient {
         job.state = State.Settled;
         bond.unlock(job.agentId, job.cover);
         emit CoverReleased(jobId, job.agentId);
+    }
+
+    /// @dev Whether the work was submitted by `deliverBy`, by the hook's record
+    /// or, if the hook was detached and missed it, by the core's.
+    function _onTime(uint256 jobId, Bonded storage job) private view returns (bool) {
+        if (job.submittedAt != 0) return true; // the hook refuses late submissions
+        uint256 submittedAt = IERC8183Jobs(core).getJob(jobId).submittedAt;
+        return submittedAt != 0 && submittedAt <= job.deliverBy;
     }
 
     function _slash(uint256 jobId, Bonded storage job) private {

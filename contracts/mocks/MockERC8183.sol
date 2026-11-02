@@ -6,12 +6,13 @@ import {ERC165Checker} from "@openzeppelin/contracts/utils/introspection/ERC165C
 import {IERC8183Hook} from "../ERC8183BondHook.sol";
 
 /// @notice A minimal ERC-8183 job escrow for tests. Not the reference
-/// implementation: it follows the published lifecycle (Open, Funded,
-/// Submitted, then Completed, Rejected or Expired), roles, and hook calls with
-/// the documented `data` encodings, and leaves out fees, claims and
-/// relayed authorisations. `claimRefund` runs no hooks, as in the standard.
+/// implementation (that one is vendored in `erc8183-reference/`): it follows
+/// the published lifecycle (Open, Funded, Submitted, then Completed, Rejected
+/// or Expired), roles, hook calls with the documented `data` encodings, and the
+/// reference's `getJob` record, and leaves out fees, claims, whitelists, pauses
+/// and relayed authorisations. `claimRefund` runs no hooks, as in the standard.
 contract MockERC8183 {
-    enum Status {
+    enum JobStatus {
         Open,
         Funded,
         Submitted,
@@ -20,91 +21,113 @@ contract MockERC8183 {
         Expired
     }
 
+    /// @notice The same fields, in the same order, as the reference's job record.
     struct Job {
         address client;
+        JobStatus status;
         address provider;
+        uint48 expiredAt;
         address evaluator;
-        uint256 expiry;
-        address hook;
-        uint256 agentId;
-        address token;
+        uint48 submittedAt;
         uint256 budget;
-        Status status;
+        address hook;
+        address paymentToken;
+        uint256 providerAgentId;
+        string description;
+        uint256 settledAmount;
+        address payoutReceiver;
     }
 
-    uint256 public jobCount;
-    mapping(uint256 => Job) public jobs;
+    uint256 public jobCounter;
+    mapping(uint256 => Job) private jobs;
 
-    function createJob(address provider, address evaluator, uint256 expiry, string calldata, address hook, uint256 agentId)
-        external
-        returns (uint256 jobId)
-    {
+    function createJob(
+        address provider,
+        address evaluator,
+        uint48 expiredAt,
+        string calldata description,
+        address hook,
+        uint256 providerAgentId
+    ) external returns (uint256 jobId) {
         if (hook != address(0)) {
             require(ERC165Checker.supportsInterface(hook, type(IERC8183Hook).interfaceId), "InvalidHook");
         }
-        jobId = ++jobCount;
-        jobs[jobId] = Job(msg.sender, provider, evaluator, expiry, hook, agentId, address(0), 0, Status.Open);
+        jobId = ++jobCounter;
+        Job storage job = jobs[jobId];
+        job.client = msg.sender;
+        job.provider = provider;
+        job.expiredAt = expiredAt;
+        job.evaluator = evaluator;
+        job.hook = hook;
+        job.providerAgentId = providerAgentId;
+        job.description = description;
     }
 
     function setBudget(uint256 jobId, address token, uint256 amount, bytes calldata optParams) external {
         Job storage job = jobs[jobId];
-        require(msg.sender == job.provider && job.status == Status.Open, "setBudget");
+        require(msg.sender == job.provider && job.status == JobStatus.Open, "setBudget");
         bytes memory data = abi.encode(msg.sender, token, amount, optParams);
         _before(job, jobId, this.setBudget.selector, data);
-        job.token = token;
+        job.paymentToken = token;
         job.budget = amount;
         _after(job, jobId, this.setBudget.selector, data);
     }
 
     function fund(uint256 jobId, address expectedToken, uint256 expectedBudget, bytes calldata optParams) external {
         Job storage job = jobs[jobId];
-        require(msg.sender == job.client && job.status == Status.Open, "fund");
-        require(job.token == expectedToken && job.budget == expectedBudget, "budget changed");
+        require(msg.sender == job.client && job.status == JobStatus.Open, "fund");
+        require(job.paymentToken == expectedToken && job.budget == expectedBudget, "budget changed");
         bytes memory data = abi.encode(msg.sender, optParams);
         _before(job, jobId, this.fund.selector, data);
-        IERC20(job.token).transferFrom(msg.sender, address(this), job.budget);
-        job.status = Status.Funded;
+        IERC20(job.paymentToken).transferFrom(msg.sender, address(this), job.budget);
+        job.status = JobStatus.Funded;
         _after(job, jobId, this.fund.selector, data);
     }
 
     function submit(uint256 jobId, bytes32 deliverable, bytes calldata optParams) external {
         Job storage job = jobs[jobId];
-        require(msg.sender == job.provider && job.status == Status.Funded, "submit");
+        require(msg.sender == job.provider && job.status == JobStatus.Funded, "submit");
+        require(block.timestamp < job.expiredAt, "expired");
         bytes memory data = abi.encode(msg.sender, deliverable, optParams);
         _before(job, jobId, this.submit.selector, data);
-        job.status = Status.Submitted;
+        job.status = JobStatus.Submitted;
+        job.submittedAt = uint48(block.timestamp);
         _after(job, jobId, this.submit.selector, data);
     }
 
     function complete(uint256 jobId, bytes32 reason, bytes calldata optParams) external {
         Job storage job = jobs[jobId];
-        require(msg.sender == job.evaluator && job.status == Status.Submitted, "complete");
+        require(msg.sender == job.evaluator && job.status == JobStatus.Submitted, "complete");
         bytes memory data = abi.encode(msg.sender, reason, optParams);
         _before(job, jobId, this.complete.selector, data);
-        job.status = Status.Completed;
-        IERC20(job.token).transfer(job.provider, job.budget);
+        job.status = JobStatus.Completed;
+        IERC20(job.paymentToken).transfer(job.provider, job.budget);
         _after(job, jobId, this.complete.selector, data);
     }
 
     function reject(uint256 jobId, bytes32 reason, bytes calldata optParams) external {
         Job storage job = jobs[jobId];
-        bool open = job.status == Status.Open && (msg.sender == job.client || msg.sender == job.provider);
-        bool funded = (job.status == Status.Funded || job.status == Status.Submitted) && msg.sender == job.evaluator;
+        bool open = job.status == JobStatus.Open && (msg.sender == job.client || msg.sender == job.provider);
+        bool funded = (job.status == JobStatus.Funded || job.status == JobStatus.Submitted) && msg.sender == job.evaluator;
         require(open || funded, "reject");
         bytes memory data = abi.encode(msg.sender, reason, optParams);
         _before(job, jobId, this.reject.selector, data);
-        job.status = Status.Rejected;
-        if (funded) IERC20(job.token).transfer(job.client, job.budget);
+        job.status = JobStatus.Rejected;
+        if (funded) IERC20(job.paymentToken).transfer(job.client, job.budget);
         _after(job, jobId, this.reject.selector, data);
     }
 
-    /// @notice Permissionless after expiry; never hookable.
+    /// @notice Permissionless from expiry; never hookable.
     function claimRefund(uint256 jobId) external {
         Job storage job = jobs[jobId];
-        require(block.timestamp > job.expiry, "not expired");
-        require(job.status == Status.Funded || job.status == Status.Submitted, "claimRefund");
-        job.status = Status.Expired;
-        IERC20(job.token).transfer(job.client, job.budget);
+        require(block.timestamp >= job.expiredAt, "not expired");
+        require(job.status == JobStatus.Funded || job.status == JobStatus.Submitted, "claimRefund");
+        job.status = JobStatus.Expired;
+        IERC20(job.paymentToken).transfer(job.client, job.budget);
+    }
+
+    function getJob(uint256 jobId) external view returns (Job memory) {
+        return jobs[jobId];
     }
 
     function _before(Job storage job, uint256 jobId, bytes4 selector, bytes memory data) private {

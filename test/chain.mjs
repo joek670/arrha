@@ -37,9 +37,11 @@ function matchesFilter(log, { address, fromBlock, toBlock, topics = [] }, latest
 
 /// `onTransaction({ tx, result })` sees every committed transaction, with the
 /// EVM's execution result (gas used, refund); scripts/gas.mjs uses it.
-export async function createChain({ start = 1_800_000_000, onTransaction } = {}) {
+/// `unlimitedCodeSize` lifts EIP-170's 24,576-byte contract size limit, for
+/// third-party contracts that exceed it.
+export async function createChain({ start = 1_800_000_000, onTransaction, unlimitedCodeSize = false } = {}) {
   const common = new Common({ chain: { ...Mainnet, chainId: CHAIN_ID }, hardfork: Hardfork.Cancun });
-  const vm = await createVM({ common });
+  const vm = await createVM({ common, evmOpts: { allowUnlimitedContractSize: unlimitedCodeSize } });
   let now = start;
   let blockNumber = 1;
   const receipts = new Map();

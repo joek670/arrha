@@ -3,6 +3,11 @@ Copyright 2026 The Arrha Authors
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
-It depends on, but does not include, OpenZeppelin Contracts (MIT License),
-viem (MIT License), the Solidity compiler's JavaScript build (MIT License)
-and the EthereumJS libraries (MPL-2.0), which are installed by npm.
+It depends on, but does not include, OpenZeppelin Contracts and Contracts
+Upgradeable (MIT License), viem (MIT License), the Solidity compiler's
+JavaScript build (MIT License) and the EthereumJS libraries (MPL-2.0), which
+are installed by npm.
+
+For tests only, it includes the ERC-8183 reference implementation from
+erc-8183/base-contracts (MIT License, Copyright (c) 2024-2026 ERC-8183), in
+contracts/mocks/erc8183-reference/ with its license.
