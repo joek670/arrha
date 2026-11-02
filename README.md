@@ -10,7 +10,7 @@ New to crypto or AI agents? Read [Arrha, explained for beginners](docs/for-begin
 
 ```
 npm install
-npm test        # compile + 62 tests on an in-process EVM, including a short fuzz run
+npm test        # compile + 92 tests on an in-process EVM, including a short fuzz run
 npm run demo    # two jobs end to end, then the agent's risk report
 npm run fuzz    # longer invariant-fuzzing campaigns (FUZZ_SEEDS, FUZZ_STEPS)
 npm run gas     # gas for deploying and for each step of a job
@@ -229,22 +229,22 @@ and calldata; Base's small L1 data fee is extra.
 
 | Step | Gas |
 |---|---:|
-| Deploy AgentBond | 1,357,000 |
-| Deploy AgentEscrow | 2,971,000 |
-| Deploy ERC8183BondHook (optional) | 1,549,000 |
+| Deploy AgentBond | 1,371,000 |
+| Deploy AgentEscrow | 2,905,000 |
+| Deploy ERC8183BondHook (optional) | 1,696,000 |
 | Approve the escrow as a slasher | 46,000 |
-| Agent: approve USDC and post a bond | 124,000 |
+| Agent: approve USDC and post a bond | 123,000 |
 | Buyer: approve USDC and open a job (two transactions) | 196,000 |
 | Anyone: open a job with the buyer's USDC authorisation (one transaction; the buyer pays nothing) | 182,000 |
 | Agent: submit the result | 29,000 |
-| Buyer: release payment | 101,000 |
+| Buyer: release payment | 100,000 |
 | Anyone: refund a late job and slash its cover | 64,000 |
 | Buyer: dispute | 27,000 |
-| Arbiter: resolve a dispute | 88,000 |
+| Arbiter: resolve a dispute | 87,000 |
 
-The core deployment (bond, escrow, slasher approval) is about 4.4M gas:
-0.000044 ETH at 0.01 gwei, 0.00044 ETH at 0.1 gwei. A delivered job is about
-326k gas: at 0.01–0.1 gwei and $3,000–5,000 per ETH, roughly 1 to 16 cents.
+The core deployment (bond, escrow, slasher approval) is about 4.3M gas:
+0.000043 ETH at 0.01 gwei, 0.00043 ETH at 0.1 gwei. A delivered job is about
+325k gas: at 0.01–0.1 gwei and $3,000–5,000 per ETH, roughly 1 to 16 cents.
 That is several times a plain x402 transfer, so bonded delivery suits jobs worth
 a dollar or more. Tiny per-call payments should stay on plain x402.
 
@@ -277,10 +277,18 @@ OWNER_KEY=0x... BUYER_KEY=0x... AGENT_ID=... node scripts/smoke.mjs
 - A test-network deployment with a public dashboard of jobs, volume and fees.
 - An external audit, then a bug bounty, then a guarded mainnet launch with job
   caps and a multisig owner.
-- Run the ERC-8183 hook against the reference implementation and propose it
-  upstream; support x402's proposed `job-escrow` scheme.
+- Propose the ERC-8183 hook upstream. It now passes against the reference
+  implementation, including its signed-authorization variant.
+- Support x402's proposed `job-escrow` scheme, once its wire format is
+  settled. It builds on the reference's signed authorizations.
 - Optimistic disputes: the buyer's claim stands unless the provider posts a
-  counter-bond, with AI-drafted rulings people can appeal.
+  counter-bond, with AI-drafted rulings people can appeal. The design must
+  follow [these rules](docs/optimistic-disputes.md).
+- ERC-8004 feedback that other contracts can read: the escrow records each
+  job's outcome, and a separate reporter contract lets anyone post one
+  feedback entry per delivered or late job, under the reporter's address. The
+  registry stays out of the payment path, and every entry is backed by a paid
+  job.
 - Quotes that require a proof of the work (TEE attestation or zkML).
 - Reputation propagated through the payment graph from verified buyers
   (TraceRank-style).
@@ -297,6 +305,10 @@ OWNER_KEY=0x... BUYER_KEY=0x... AGENT_ID=... node scripts/smoke.mjs
   submitted on time, not whether it is good.
 - **The ERC-8004 registry is a dependency.** It is upgradeable, and Arrha trusts
   it to say who owns an agent and which wallet it runs on.
+- **For bonded ERC-8183 jobs, the core's admin is trusted.** A pause that
+  spans a job's `deliverBy` can get an on-time provider slashed. A hook that
+  the admin detaches before funding leaves the job without cover. See
+  [the hook's docs](docs/erc-8183-hook.md#what-the-hook-trusts-the-core-for).
 - **An agent wallet's key can spend its agent's free bond** up to the owner's
   caps, by signing quotes for fake jobs and letting them run late. Set caps.
 - **The risk report and the paywall read events from `fromBlock`** (default
@@ -324,17 +336,19 @@ OWNER_KEY=0x... BUYER_KEY=0x... AGENT_ID=... node scripts/smoke.mjs
 | `contracts/AgentEscrow.sol` | Signed quotes, escrow, gasless opening, deadline slashing, disputes, fees, freeze-safe payouts |
 | `contracts/ERC8183BondHook.sol` | Provider bonds for ERC-8183 jobs ([docs](docs/erc-8183-hook.md)) |
 | `contracts/IAccountPolicy.sol`, `contracts/SanctionsPolicy.sol` | Opt-in compliance checks |
-| `contracts/mocks/` | Test stand-ins: USDC with freezes and EIP-3009, ERC-8004 registries, a sanctions list, a minimal ERC-8183 |
+| `contracts/mocks/` | Test stand-ins: USDC with freezes and EIP-3009, ERC-8004 registries, a sanctions list, a minimal ERC-8183, and the ERC-8183 reference implementation (vendored unmodified, MIT) with its proxy |
 | `sdk/arrha.mjs` | viem SDK: quotes, x402 extension, trust and policy checks, opening jobs (normal or gasless) |
 | `sdk/risk.mjs` | The risk model |
 | `sdk/erc8183.mjs` | Cover terms and selectors for ERC-8183 |
 | `sdk/x402.mjs` | x402 paywall for providers and fetch wrapper for buyers |
-| `test/` | 62 tests, the fuzzer, and the in-process chain |
+| `test/` | 92 tests, the fuzzer, and the in-process chain |
 | `scripts/` | Build, demo, deploy, smoke run, fuzz campaigns, gas table |
 
 ## License
 
-[Apache License 2.0](LICENSE). Contributions are welcome: see
+[Apache License 2.0](LICENSE). The vendored ERC-8183 reference implementation
+in `contracts/mocks/erc8183-reference/` keeps its MIT license (see
+[NOTICE](NOTICE)). Contributions are welcome: see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 *Research software. Not financial, legal or investment advice.*

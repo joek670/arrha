@@ -1,0 +1,3 @@
+# Keep the vendored ERC-8183 reference byte-identical to upstream, so the
+# SHA-256 sums in its README check out on every platform.
+contracts/mocks/erc8183-reference/** -text
